@@ -1,6 +1,10 @@
 ctranslate2>=4.0,<5
-huggingface_hub>=0.23
+# pyannote.audio 3.4.x 仍向 hf_hub_download 传 use_auth_token；huggingface_hub>=1 已移除该参数。
+huggingface_hub>=0.23,<1
 tokenizers>=0.13,<1
 onnxruntime>=1.14,<2 
 av>=11
 tqdm
+
+# Web UI（web_transcribe.py）；不需要网页时可手动不装 flask
+flask>=3.0,<4

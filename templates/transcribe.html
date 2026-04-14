@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>音频转写</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9cb3;
+      --accent: #3d8bfd;
+      --border: #2d3a4d;
+      --err: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 640px; margin: 0 auto; padding: 2rem 1.25rem; }
+    h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 0.25rem; }
+    .sub { color: var(--muted); font-size: 0.875rem; margin-bottom: 1.5rem; }
+    form {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+    }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem; }
+    label .hint { font-weight: 400; color: var(--muted); font-size: 0.72rem; opacity: 0.92; }
+    .row { margin-bottom: 1rem; }
+    input[type="file"] {
+      width: 100%;
+      padding: 0.5rem 0;
+      font-size: 0.875rem;
+      color: var(--text);
+    }
+    select, input[type="text"], input[type="number"] {
+      width: 100%;
+      padding: 0.5rem 0.65rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.875rem;
+    }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    @media (max-width: 520px) { .grid { grid-template-columns: 1fr; } }
+    .checks { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 0.5rem; }
+    .checks label { display: flex; align-items: baseline; gap: 0.35rem; flex-wrap: wrap; cursor: pointer; color: var(--text); font-size: 0.875rem; }
+    .checks label .hint { font-size: 0.72rem; color: var(--muted); font-weight: 400; }
+    .checks input { width: auto; }
+    button[type="submit"] {
+      width: 100%;
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #fff;
+      background: var(--accent);
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    button[type="submit"]:hover { filter: brightness(1.08); }
+    button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; }
+    .msg { margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.875rem; display: none; }
+    .msg.busy { display: block; background: rgba(139,156,179,0.15); color: var(--text); border: 1px solid var(--border); }
+    .msg.err { display: block; background: rgba(248,113,113,0.12); color: var(--err); border: 1px solid rgba(248,113,113,0.35); }
+    .msg.ok { display: block; background: rgba(61,139,253,0.12); color: var(--accent); border: 1px solid rgba(61,139,253,0.35); }
+    .msg a.dl { color: var(--accent); font-weight: 600; word-break: break-all; }
+    .submit-note { font-size: 0.72rem; color: var(--muted); margin: 0.5rem 0 0; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>音频转写</h1>
+    <p class="sub">上传音频，调用本目录 transcribe_audio.py，返回 .txt 下载（端口 11221）。长音频会转写较久，提交后请等待状态提示，勿重复点击。</p>
+    <form id="f" action="/transcribe" method="post" enctype="multipart/form-data">
+      <div class="row">
+        <label for="audio">音频文件 <span class="hint">m4a/mp3/wav 等，单文件最大约 500MB</span></label>
+        <input id="audio" name="audio" type="file" accept=".m4a,.mp3,.wav,.webm,.ogg,.flac,.mp4,.mpeg,.opus,audio/*" required />
+      </div>
+      <div class="grid">
+        <div class="row" style="margin:0">
+          <label for="model_size">模型 <span class="hint">越大越准越慢、占显存/内存更多</span></label>
+          <select id="model_size" name="model_size">
+            <option value="tiny">tiny</option>
+            <option value="base">base</option>
+            <option value="small" selected>small</option>
+            <option value="medium">medium</option>
+            <option value="large-v3">large-v3</option>
+          </select>
+        </div>
+        <div class="row" style="margin:0">
+          <label for="device">设备 <span class="hint">cuda 需 NVIDIA GPU 与环境配好</span></label>
+          <select id="device" name="device">
+            <option value="cpu">cpu</option>
+            <option value="cuda" selected>cuda</option>
+            <option value="auto">auto</option>
+          </select>
+        </div>
+        <div class="row" style="margin:0">
+          <label for="compute_type">compute_type <span class="hint">GPU 常用 float16，CPU 常用 int8</span></label>
+          <select id="compute_type" name="compute_type">
+            <option value="int8">int8</option>
+            <option value="float16" selected>float16</option>
+            <option value="int8_float16">int8_float16</option>
+          </select>
+        </div>
+        <div class="row" style="margin:0">
+          <label for="beam_size">beam_size <span class="hint">解码束宽，越大越稳但更慢</span></label>
+          <input id="beam_size" name="beam_size" type="number" min="1" max="20" value="5" />
+        </div>
+        <div class="row" style="margin:0">
+          <label for="language">语言（可选） <span class="hint">如 zh、en；留空由模型自动检测</span></label>
+          <input id="language" name="language" type="text" placeholder="zh / en，留空自动" />
+        </div>
+        <div class="row" style="margin:0">
+          <label for="task">task <span class="hint">transcribe 原语言转写；translate 译成英文</span></label>
+          <select id="task" name="task">
+            <option value="transcribe" selected>transcribe</option>
+            <option value="translate">translate</option>
+          </select>
+        </div>
+        <div class="row" style="margin:0">
+          <label for="min_silence_ms">min_silence_ms（VAD） <span class="hint">判定静音的最短毫秒，与 vad_filter 联用</span></label>
+          <input id="min_silence_ms" name="min_silence_ms" type="number" min="0" max="10000" value="500" />
+        </div>
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" name="vad_filter" value="1" checked /> <span>vad_filter</span> <span class="hint">去掉长静音段，常能提速</span></label>
+        <label><input type="checkbox" name="with_timestamps" value="1" /> <span>with_timestamps</span> <span class="hint">每行前带起止时间戳</span></label>
+        <label><input type="checkbox" name="diarize" value="1" /> <span>diarize</span> <span class="hint">说话人标签；服务端需 HF_TOKEN 与 pyannote 模型授权</span></label>
+      </div>
+      <div class="grid" style="margin-top:1rem">
+        <div class="row" style="margin:0">
+          <label for="min_speakers">min_speakers（仅 diarize） <span class="hint">最少说话人数提示，可留空</span></label>
+          <input id="min_speakers" name="min_speakers" type="number" min="1" max="32" placeholder="可选" />
+        </div>
+        <div class="row" style="margin:0">
+          <label for="max_speakers">max_speakers（仅 diarize） <span class="hint">最多说话人数提示，可留空</span></label>
+          <input id="max_speakers" name="max_speakers" type="number" min="1" max="32" placeholder="可选" />
+        </div>
+      </div>
+      <button type="submit" id="btn">开始转写并下载 TXT</button>
+      <p class="submit-note">提交后请等待，大文件可能需数分钟</p>
+    </form>
+    <div id="msg" class="msg" role="status"></div>
+  </div>
+  <script>
+    document.getElementById("f").addEventListener("submit", async function (e) {
+      e.preventDefault();
+      const btn = document.getElementById("btn");
+      const msg = document.getElementById("msg");
+      const audioFile = document.getElementById("audio").files[0];
+      if (!audioFile) {
+        msg.className = "msg err";
+        msg.textContent = "请先选择音频文件。";
+        return;
+      }
+      msg.className = "msg busy";
+      msg.textContent = "正在转写（大文件可能需数分钟），请勿关闭页面…";
+      btn.disabled = true;
+      let blobUrl = null;
+      try {
+        const fd = new FormData(this);
+        const r = await fetch("/transcribe", { method: "POST", body: fd });
+        const t = await r.text();
+        if (!r.ok) {
+          throw new Error(t || r.statusText);
+        }
+        const orig = audioFile.name || "transcript";
+        const base = orig.replace(/\.[^.]+$/, "");
+        const name = base + "_transcript.txt";
+        const blob = new Blob([t], { type: "text/plain;charset=utf-8" });
+        blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = name;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        msg.className = "msg ok";
+        msg.textContent = "";
+        const line = document.createElement("div");
+        line.textContent = "若未出现下载，请点：";
+        const link = document.createElement("a");
+        link.className = "dl";
+        link.href = blobUrl;
+        link.download = name;
+        link.textContent = name;
+        msg.appendChild(line);
+        msg.appendChild(link);
+      } catch (err) {
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
+        msg.className = "msg err";
+        msg.textContent = err.message || String(err);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

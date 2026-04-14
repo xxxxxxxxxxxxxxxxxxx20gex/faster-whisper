@@ -13,3 +13,14 @@ venv/
 # Ignore IDE, Editor Files
 .idea/
 .vscode/
+
+# Python 打包元数据
+*.egg-info/
+
+# 本地转写 / Web 下载等产生的临时或输出（要入库请改名或 git add -f）
+out.txt
+*_transcript.txt
+*.log
+
+# Web 若将来把上传缓存放在仓库内可解开下一行
+# fw_web_*/
