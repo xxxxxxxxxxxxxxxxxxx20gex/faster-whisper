@@ -31,7 +31,14 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from flask import Flask, Response, after_this_request, render_template, request, send_file
+from flask import (
+    Flask,
+    Response,
+    after_this_request,
+    render_template,
+    request,
+    send_file,
+)
 from werkzeug.utils import secure_filename
 
 
@@ -42,12 +49,51 @@ def _fail(msg: str, code: int = 400) -> Response:
         mimetype="text/plain; charset=utf-8",
     )
 
+
+def _cleanup_dir(path: Path) -> None:
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _form_str(name: str, default: str = "") -> str:
+    return request.form.get(name, default).strip()
+
+
+def _get_choice(name: str, *, default: str, choices: tuple[str, ...]) -> str:
+    value = _form_str(name, default)
+    if value not in choices:
+        return ""
+    return value
+
+
+def _parse_int_field(
+    name: str,
+    *,
+    default: str,
+    min_value: int,
+    max_value: int,
+    optional: bool = False,
+) -> int | None:
+    raw = _form_str(name, default)
+    if optional and not raw:
+        return None
+
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} 须为整数") from None
+
+    if not min_value <= value <= max_value:
+        raise ValueError(f"{name} 须在 {min_value}–{max_value}")
+    return value
+
+
 ROOT = Path(__file__).resolve().parent
 SCRIPT = ROOT / "transcribe_audio.py"
 ALLOWED_SUFFIX = frozenset(
     {".m4a", ".mp3", ".wav", ".webm", ".ogg", ".flac", ".mp4", ".mpeg", ".opus"}
 )
-MODEL_SIZE_RE = re.compile(r"^[\w.\-]+$")
+SAFE_TOKEN_RE = re.compile(r"^[\w.\-]+$")
+LANGUAGE_RE = re.compile(r"^[a-zA-Z\-]{2,15}$")
 
 app = Flask(__name__, template_folder=str(ROOT / "templates"))
 app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024
@@ -73,64 +119,63 @@ def transcribe():
             f"不支持的扩展名: {suf}，允许: {', '.join(sorted(ALLOWED_SUFFIX))}"
         )
 
-    model_size = request.form.get("model_size", "small").strip()
-    if not MODEL_SIZE_RE.match(model_size):
+    model_size = _form_str("model_size", "small")
+    if not SAFE_TOKEN_RE.match(model_size):
         return _fail("非法 model_size")
 
-    device = request.form.get("device", "cpu")
-    if device not in ("cpu", "cuda", "auto"):
+    device = _get_choice("device", default="cpu", choices=("cpu", "cuda", "auto"))
+    if not device:
         return _fail("非法 device")
 
-    compute_type = request.form.get("compute_type", "int8").strip()
-    if not re.match(r"^[\w.\-]+$", compute_type):
+    compute_type = _form_str("compute_type", "int8")
+    if not SAFE_TOKEN_RE.match(compute_type):
         return _fail("非法 compute_type")
 
     try:
-        beam_size = int(request.form.get("beam_size", "5"))
-    except ValueError:
-        return _fail("beam_size 须为整数")
-    if not 1 <= beam_size <= 20:
-        return _fail("beam_size 须在 1–20")
+        beam_size = _parse_int_field(
+            "beam_size",
+            default="5",
+            min_value=1,
+            max_value=20,
+        )
+        min_silence_ms = _parse_int_field(
+            "min_silence_ms",
+            default="500",
+            min_value=0,
+            max_value=10000,
+        )
+        min_spk_i = _parse_int_field(
+            "min_speakers",
+            default="",
+            min_value=1,
+            max_value=32,
+            optional=True,
+        )
+        max_spk_i = _parse_int_field(
+            "max_speakers",
+            default="",
+            min_value=1,
+            max_value=32,
+            optional=True,
+        )
+    except ValueError as e:
+        return _fail(str(e))
 
-    language = request.form.get("language", "").strip() or None
-    if language is not None and not re.match(r"^[a-zA-Z\-]{2,15}$", language):
+    language = _form_str("language") or None
+    if language is not None and not LANGUAGE_RE.match(language):
         return _fail("非法 language")
 
-    task = request.form.get("task", "transcribe")
-    if task not in ("transcribe", "translate"):
+    task = _get_choice(
+        "task",
+        default="transcribe",
+        choices=("transcribe", "translate"),
+    )
+    if not task:
         return _fail("非法 task")
-
-    try:
-        min_silence_ms = int(request.form.get("min_silence_ms", "500"))
-    except ValueError:
-        return _fail("min_silence_ms 须为整数")
-    if not 0 <= min_silence_ms <= 10000:
-        return _fail("min_silence_ms 须在 0–10000")
 
     vad_filter = request.form.get("vad_filter") == "1"
     with_timestamps = request.form.get("with_timestamps") == "1"
     diarize = request.form.get("diarize") == "1"
-
-    min_spk = request.form.get("min_speakers", "").strip()
-    max_spk = request.form.get("max_speakers", "").strip()
-    if min_spk:
-        try:
-            min_spk_i = int(min_spk)
-        except ValueError:
-            return _fail("min_speakers 须为整数")
-        if not 1 <= min_spk_i <= 32:
-            return _fail("min_speakers 须在 1–32")
-    else:
-        min_spk_i = None
-    if max_spk:
-        try:
-            max_spk_i = int(max_spk)
-        except ValueError:
-            return _fail("max_speakers 须为整数")
-        if not 1 <= max_spk_i <= 32:
-            return _fail("max_speakers 须在 1–32")
-    else:
-        max_spk_i = None
 
     if not SCRIPT.is_file():
         return _fail("找不到 transcribe_audio.py", 500)
@@ -181,16 +226,16 @@ def transcribe():
             check=False,
         )
     except subprocess.TimeoutExpired:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        _cleanup_dir(tmp_dir)
         return _fail("转写超时（>2h）", 504)
 
     if proc.returncode != 0:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        _cleanup_dir(tmp_dir)
         err = (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
         return _fail(err[:8000], 500)
 
     if not out_path.is_file():
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        _cleanup_dir(tmp_dir)
         return _fail("未生成输出文件", 500)
 
     stem = Path(raw_name).stem or "transcript"
@@ -199,7 +244,7 @@ def transcribe():
 
     @after_this_request
     def _cleanup(_response):
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        _cleanup_dir(tmp_dir)
         return _response
 
     return send_file(
